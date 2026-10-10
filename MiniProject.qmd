@@ -1,0 +1,238 @@
+---
+title: "Mini-Project: Text Analysis"
+author: "Jimale Keyse"
+format:
+  pdf:
+    pdf-engine: pdflatex
+editor_options: 
+  chunk_output_type: console
+editor: 
+  markdown: 
+    wrap: sentence
+---
+
+## About the Data
+
+Reason behind choosing this dataset is because I love cars, so I was curious about what people say about Tesla. Tesla is one of the most talked-about car companies, so I picked tweets with the hashtag #Tesla. I like this data because tweets show what real people think, in their own words, and they are posted at all hours of the day. The data has 10,016 tweets, and all of them are from one day, July 11, 2022. I kept the 7,358 English tweets, because the sentiment tools only work on English. Then I removed links, @names, and extra symbols so I could look at just the words people wrote.
+
+## Questions I Want to Explore
+
+In this project, the main question i am trying to explore is Tesla Twitter really about Tesla cars, or is it about Elon Musk? And do tweets that mention Elon sound more positive or more negative? I made two groups. Group 1 is tweets that say "Elon" or "Musk." Group 2 is all the other tweets. Then I compared the two groups. I looked at the top words, the positive and negative words, the words that show up in only one group, and how many tweets there were each hour.
+
+```{r setup, include=FALSE}
+# Suppress all messages and warnings in the PDF
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidytext) #for text analysis and sentiment
+library(tidyverse) #for data work and plots
+library(lubridate) #for working with dates
+```
+
+```{r}
+# Load the data 
+tesla <- read.csv("Tesla.csv")
+```
+
+```{r}
+# STEP 1: Clean the data
+
+tesla_clean <- tesla |>
+  mutate(language = str_trim(language)) |>
+  filter(language == "en") |>
+  mutate(
+    date = ymd_hms(date),
+    tweet_clean = tweet |>
+      str_replace_all("https?://\\S+", "") |> # removing web links
+      str_replace_all("@\\w+", "") |> #  @mentions
+      str_replace_all("#", "") |> # hashtag symbols
+      str_replace_all("&amp;", " ") |>#  leftover &amp; pieces
+      str_squish()    # extra spaces
+  ) |>
+  filter(!is.na(tweet_clean), tweet_clean != "")
+
+# How many English tweets do we have?
+nrow(tesla_clean)
+```
+
+```{r}
+# Here counting how often certain topics show up
+for (term in c("Cybertruck", "Model 3", "Model Y", "Model S",
+               "Autopilot", "FSD", "Elon", "Musk", "battery",
+               "charging", "range", "price", "competition")) {
+  n <- tesla_clean |>
+    filter(str_detect(tweet_clean, regex(term, ignore_case = TRUE))) |>
+    nrow()
+  cat(term, ":", n, "\n")
+}
+```
+
+```{r}
+#| fig-alt: 'This is a bar chart of the 20 words used most in English Tesla tweets. Stop words, links, and mentions are removed. The x-axis is how many times each word is used, from 0 to about 6,000. The y-axis lists just the words, with the most used word at the top. The word tesla is used the most, about 5,800 times. Next we have twitter (which is about 1,000), elon (about 850), and musk (about 700). The other words, like stock, car, buy, and deal, are used about 200 to 570 times each. Words about Musk and the Twitter deal are used more than car words like car, model, and ev.'
+
+# PLOT 1: Top 20 most common words
+
+tesla_clean |>
+  # split each tweet into single words
+  unnest_tokens(word, tweet_clean) |>
+  anti_join(stop_words, by = "word") |>
+  count(word, sort = TRUE) |>
+  head(20) |>
+  mutate(word = reorder(word, n)) |>
+  ggplot(aes(n, word)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    title = "Top 20 Words in Tesla Tweets",
+    subtitle = "Links, mentions, and stop words removed",
+    x = "Number of times used",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Deviding the data into Elon tweets and non-Elon tweets
+# "Elon|Musk" matches either word, case-insensitive
+tesla_split <- tesla_clean |>
+  mutate(mentions_elon = str_detect(tweet_clean, regex("Elon|Musk", ignore_case = TRUE)))
+
+tesla_split |> count(mentions_elon) #how many tweets in each gorup?
+```
+
+```{r}
+# Bing gives each word a label: positive or negative
+# unnest_tokens splits tweets into words, inner_join adds the labels
+
+tesla_sentiment <- tesla_split |>
+  unnest_tokens(word, tweet_clean) |>
+  inner_join(get_sentiments("bing"), by = "word", relationship = "many-to-many") |>
+  count(mentions_elon, sentiment) |>
+  group_by(mentions_elon) |>
+  mutate(percent = round(100 * n / sum(n), 1)) |> # % inside each group
+  ungroup()
+
+# Showing the table
+knitr::kable(tesla_sentiment,
+             caption = "Positive and negative words: Elon vs non-Elon tweets")
+```
+
+```{r}
+#| fig-alt: 'This is a stacked bar chart with two bars. The x-axis shows if a tweet says Elon or Musk (No or Yes). The y-axis is the share of feeling words, from 0 to 1. Each bar is split into positive words and negative words. In tweets without Elon, about 57 percent of the feeling words are positive. In tweets with Elon, only about 44 percent are positive. So tweets with Elon are more negative.'
+
+# PLOT 2: Sentiment split - Elon vs non-Elon
+
+tesla_sentiment |>
+  ggplot(aes(x = mentions_elon, y = n, fill = sentiment)) +
+  geom_col(position = "fill") +
+  geom_text(aes(label = paste0(percent, "%"), group = sentiment),
+            position = position_fill(vjust = 0.5),   # put the number in the middle
+            color = "white", size = 6, fontface = "bold") +
+  labs(
+    title = "Sentiment of Tesla Tweets: Elon vs Non-Elon",
+    subtitle = "Share of positive and negative words (bing)",
+    x = "Mentions Elon or Musk?",
+    y = "Proportion",
+    fill = "Sentiment"
+  ) +
+  scale_fill_manual(values = c("positive" = "#1b9e77", "negative" = "#d95f02")) +
+  scale_x_discrete(labels = c("FALSE" = "No", "TRUE" = "Yes")) +
+  theme_minimal()
+```
+
+```{r}
+#| fig-alt: 'This is a line chart of how many English Tesla tweets there were. The x-axis is the time of day in UTC, from about 4:00 to 16:00. The y-axis is the number of tweets each hour, from about 300 to about 1,230. In the morning the line stays low, at about 300 to 475 tweets an hour. After noon the line goes up, and it goes up fast after 14:00. The top is at 16:00, with about 1,230 tweets. So there was a big jump in tweets in the afternoon.'
+
+# PLOT 3: Timeline of tweets over time
+# We remove the 17:00 hour because the data stops at 17:06
+
+tesla_clean |>
+  mutate(hour_block = floor_date(date, "hour")) |> #rounding each time down to hour
+  count(hour_block) |>
+  filter(hour_block < ymd_hms("2022-07-11 17:00:00")) |>
+  ggplot(aes(x = hour_block, y = n)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(color = "steelblue", size = 2) +
+  labs(
+    title = "Tesla Tweets Over Time",
+    subtitle = "Number of English tweets per hour - July 11, 2022",
+    x = "Time (UTC)",
+    y = "Number of tweets",
+    caption = "NOTE: The last partial hour (17:00) is left out because the data stops at 17:06"
+  ) +
+  theme_minimal()
+```
+
+**Alt-text (Four Ingredients Model):**
+
+1. **Type of chart:** This is a line chart with a dot for each hour. It shows how many English Tesla tweets there were each hour.
+
+2. **Variables on the axes:** The x-axis is the time of day in UTC on July 11, 2022. The y-axis is the number of tweets in each hour.
+
+3. **Range of values:** The time goes from about 4:00 to 16:00. The number of tweets goes from about 300 to about 1,230 an hour.
+
+4. **What the picture tells us:** In the morning there are not many tweets, about 300 to 475 an hour. After noon the number goes up, and it goes up fast after 14:00. The top is about 1,230 tweets at 16:00. So there was a big jump in tweets in the afternoon.
+
+```{r}
+#| fig-alt: 'This is a bar chart with two panels. One panel is for tweets that say Elon and the other one is for all the other tweets. The bars show the words that are special to each group. These are words used a lot in one group and not used in the other group. The x-axis is the TF-IDF score, from 0 to about 0.005. The y-axis lists the words. The scores are small. In the Elon panel, takeover has the highest score by far. After it come 8.5, firm, saga, artist, bizarre, walking, and founder. In the other panel, the words are charging, battery, 2022, apple, vehicle, power, vehicles, and speed. These words are about cars and tech.'
+
+# PLOT 4: TF-IDF - words that are special to each group
+# TF-IDF finds words that are common in one group but not in the other
+# I remove "elon" and "musk" words, because they are how we made the groups
+
+tesla_split |>
+  mutate(group = if_else(mentions_elon, "Elon tweets", "Other tweets")) |>
+  unnest_tokens(word, tweet_clean) |>
+  anti_join(stop_words, by = "word") |>
+  filter(!str_detect(word, "elon|musk")) |>
+  count(group, word) |>
+  filter(n >= 8) |>
+  bind_tf_idf(word, group, n) |>
+  group_by(group) |>
+  slice_max(tf_idf, n = 8, with_ties = FALSE) |>
+  ungroup() |>
+  mutate(word = reorder_within(word, tf_idf, group)) |>
+  ggplot(aes(tf_idf, word, fill = group)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~group, scales = "free_y") +
+  scale_y_reordered() +
+  scale_fill_manual(values = c("Elon tweets" = "#d95f02", "Other tweets" = "#1b9e77")) +
+  labs(
+    title = "Most Distinctive Words: Elon vs Other Tweets",
+    subtitle = "TF-IDF scores (words used at least 8 times, Elon and Musk removed)",
+    x = "TF-IDF",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# How many tweets share the headline about the "takeover saga"?
+
+tesla_split |>
+  summarise(
+    headline_tweets = sum(str_detect(tweet_clean, "(?i)takeover\\s+saga")), #Ignore lower and uper case
+    all_tweets = n()
+  ) |>
+  mutate(percent = round(100 * headline_tweets / all_tweets, 1))
+```
+
+## What I Found
+
+**1. Not many tweets say Elon or Musk.** I thought most tweets would be about Elon. But only 1,163 out of 7,358 tweets (about 16%) say his name. The word "tesla" is used the most, about 5,800 times. The next word is "twitter" (about 1,000). Then come "elon" (about 850) and "musk" (about 700). So a lot of tweets are about the Twitter deal and Elon, but most tweets do not say his name. One note: I took out @names when I cleaned the data, so tweets that only tagged @elonmusk are not in my Elon group.
+
+**2. Tweets about Elon are more negative.** In tweets without Elon, 57.4% of the feeling words are positive. In tweets with Elon, only 44.5% are positive. That is about 13 points lower. So yes, saying Elon's name changes the feeling of the tweet. But this only counts single words from the bing list. It can not understand jokes or sarcasm, so it is not perfect.
+
+**3. There were many more tweets in the afternoon.** In the morning there were about 300 to 475 tweets each hour. After noon the number went up. The top was about 1,230 tweets at 16:00 UTC, which is 11:00 AM in Minnesota. I looked this up. On July 8, Musk told Twitter he was ending the $44 billion deal. On July 12, Twitter sued him. My data is from July 11, right between those two days. So the jump fits the Twitter news. But I can not prove the news caused it.
+
+**4. The two groups use different words.** I took out "elon" and "musk" so I could see what else was different. In the Elon group I saw "takeover," "8.5," "saga," and "bizarre." I searched the data and found that these come from one headline that about 26 tweets shared. It was a Fortune headline that said Musk's Twitter takeover may have been a cover to sell $8.5 billion of Tesla stock. So this side shows one story repeated, not a normal Elon tweet. The other group has words like "charging," "battery," "vehicle," and "speed." These are about the cars. The scores are very small, so I think this is only a small clue.
+
+**In short:** Most Tesla tweets do not say Elon's name. But the tweets that do say it are more negative. The big jump in tweets in the afternoon fits the Twitter deal news.
+
+## Where to Find the Required Parts
+
+- **`str_` functions (4):** `str_trim`, `str_replace_all`, `str_squish`, and `str_detect`. They are in the cleaning chunk, the topic count chunk, the Elon split chunk, and the plot 4 chunk.
+- **Regular expressions (6):** `"https?://\\S+"` (web links), `"@\\w+"` (@names), `"&amp;"` (leftover pieces), `"Elon|Musk"` (makes the two groups), `"elon|musk"` (taken out of plot 4), and `"(?i)takeover\\s+saga"` (finds the shared headline).
+- **Text analysis (3):** word counts (Plot 1), bing sentiment (Plot 2 and the table), and TF-IDF (Plot 4).
+- **Plots and table:** Plot 1 (top words), Plot 2 and the table (positive and negative words), Plot 3 (tweets over time), and Plot 4 (special words).
+- **Alt-text (Four Ingredients Model):** under Plot 3, the line chart.
